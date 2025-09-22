@@ -2,6 +2,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, BackHandler, Modal, ScrollView, StyleSheet, TextInput, TouchableOpacity } from 'react-native';
@@ -14,6 +15,7 @@ interface Exercise {
   reps: string;
   weight?: string;
   completedWeight?: string; // Peso realmente executado
+  suggestedWeight?: string; // Indica se o peso foi sugerido baseado no histórico
   currentSet: number; // Série atual sendo executada
   completedSets: number; // Séries já concluídas
   completed: boolean;
@@ -35,6 +37,44 @@ interface Workout {
   exercises: Exercise[];
   completed: boolean;
   defaultRestTime?: number; // Tempo padrão de descanso em segundos
+}
+
+// Interface para treinos completados (histórico)
+interface CompletedWorkout {
+  id: string;
+  templateId: string; // ID do template original
+  name: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  totalTimeMinutes: number;
+  exercises: {
+    id: string;
+    name: string;
+    sets: number;
+    reps: string;
+    targetWeight?: string;
+    completedWeight?: string;
+    completedSets: number;
+    notes?: string;
+  }[];
+}
+
+// Chaves para AsyncStorage
+const COMPLETED_WORKOUTS_KEY = '@completed_workouts';
+const WORKOUT_PROGRESS_KEY = '@workout_progress';
+
+// Interface para progresso salvo
+interface WorkoutProgress extends Workout {
+  savedAt: string; // Timestamp de quando foi salvo
+  startTime: string; // Quando o treino começou
+  elapsedTime: number; // Tempo decorrido em segundos
+  restState?: {
+    isResting: boolean;
+    exerciseId: string;
+    remainingTime: number;
+    duration: number;
+  };
 }
 
 export default function WorkoutsScreen() {
@@ -69,18 +109,81 @@ export default function WorkoutsScreen() {
         initializedRef.current = true;
         try {
           const workoutTemplate: WorkoutTemplate = JSON.parse(params.workoutData as string);
-          const workoutWithStatus: Workout = {
-            ...workoutTemplate,
-            date: new Date().toISOString().split('T')[0], // Data atual
-            completed: false,
-            exercises: workoutTemplate.exercises.map((ex: any) => ({ 
-              ...ex, 
-              completed: false, 
-              inProgress: false,
-              currentSet: 1,
-              completedSets: 0
-            }))
-          };
+          
+          // Verificar se há progresso salvo para este treino
+          const savedProgress = await AsyncStorage.getItem(WORKOUT_PROGRESS_KEY);
+          let workoutWithStatus: Workout;
+          
+          if (savedProgress) {
+            const progressData: WorkoutProgress = JSON.parse(savedProgress);
+            // Verificar se o progresso é do mesmo treino (mesmo ID)
+            if (progressData.id === workoutTemplate.id) {
+              workoutWithStatus = progressData;
+              
+              // Recuperar tempo de início
+              setStartTime(new Date(progressData.startTime));
+              setElapsedTime(progressData.elapsedTime);
+              
+              // Recuperar estado do cronômetro de descanso se estava ativo
+              if (progressData.restState && progressData.restState.isResting) {
+                setIsResting(true);
+                setRestExerciseId(progressData.restState.exerciseId);
+                setRestTimer(progressData.restState.remainingTime);
+                setRestDuration(progressData.restState.duration);
+                
+                // Retomar cronômetro de descanso
+                if (progressData.restState.remainingTime > 0) {
+                  startRestTimerFromSaved(progressData.restState.exerciseId, progressData.restState.remainingTime);
+                }
+              }
+              
+              // Mostrar alert informando sobre recuperação
+              setTimeout(() => {
+                Alert.alert(
+                  '🔄 Treino Recuperado!', 
+                  'Seu treino anterior foi recuperado. Continue de onde parou! 💪',
+                  [{ text: 'Continuar' }]
+                );
+              }, 500);
+              
+              console.log('Progresso anterior recuperado com estado completo');
+            } else {
+              // Progresso de treino diferente, começar novo
+              const baseWorkout = {
+                ...workoutTemplate,
+                date: new Date().toISOString().split('T')[0],
+                completed: false,
+                exercises: workoutTemplate.exercises.map((ex: any) => ({ 
+                  ...ex, 
+                  completed: false, 
+                  inProgress: false,
+                  currentSet: 1,
+                  completedSets: 0
+                }))
+              };
+              
+              // Aplicar sugestões de peso baseadas no histórico
+              workoutWithStatus = await applyWeightSuggestions(baseWorkout);
+            }
+          } else {
+            // Nenhum progresso salvo, começar novo treino
+            const baseWorkout = {
+              ...workoutTemplate,
+              date: new Date().toISOString().split('T')[0],
+              completed: false,
+              exercises: workoutTemplate.exercises.map((ex: any) => ({ 
+                ...ex, 
+                completed: false, 
+                inProgress: false,
+                currentSet: 1,
+                completedSets: 0
+              }))
+            };
+            
+            // Aplicar sugestões de peso baseadas no histórico
+            workoutWithStatus = await applyWeightSuggestions(baseWorkout);
+          }
+          
           setCurrentWorkout(workoutWithStatus);
           currentWorkoutRef.current = workoutWithStatus;
           setStartTime(new Date());
@@ -115,12 +218,29 @@ export default function WorkoutsScreen() {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       const workout = currentWorkoutRef.current;
       if (workout && !workout.completed) {
+        // Salvar progresso antes de perguntar
+        saveWorkoutProgress(workout);
+        
         Alert.alert(
-          'Abandonar Treino?',
-          'Você tem certeza que deseja abandonar o treino em andamento?',
+          'Salvar e Sair?',
+          'Seu progresso será salvo. Deseja continuar o treino mais tarde ou abandonar?',
           [
             { text: 'Continuar Treino', style: 'cancel' },
-            { text: 'Abandonar', style: 'destructive', onPress: () => router.replace('/') }
+            { 
+              text: 'Salvar e Sair', 
+              onPress: () => {
+                saveWorkoutProgress(workout);
+                router.replace('/');
+              }
+            },
+            { 
+              text: 'Abandonar Treino', 
+              style: 'destructive', 
+              onPress: () => {
+                AsyncStorage.removeItem(WORKOUT_PROGRESS_KEY);
+                router.replace('/');
+              }
+            }
           ]
         );
         return true;
@@ -139,6 +259,23 @@ export default function WorkoutsScreen() {
       }
     };
   }, []);
+
+  // Salvamento automático periódico (a cada 30 segundos)
+  useEffect(() => {
+    let saveInterval: any;
+    
+    if (currentWorkout && !currentWorkout.completed) {
+      saveInterval = setInterval(() => {
+        saveWorkoutProgress(currentWorkout);
+      }, 30000); // Salva a cada 30 segundos
+    }
+    
+    return () => {
+      if (saveInterval) {
+        clearInterval(saveInterval);
+      }
+    };
+  }, [currentWorkout, startTime, elapsedTime, isResting, restTimer, restExerciseId, restDuration]);
 
   // Renderização de loading - todos os hooks devem estar acima desta linha
   if (isLoading || !currentWorkout) {
@@ -192,6 +329,10 @@ export default function WorkoutsScreen() {
         })
       };
       currentWorkoutRef.current = updatedWorkout;
+      
+      // Salvar progresso após completar série
+      saveWorkoutProgress(updatedWorkout);
+      
       return updatedWorkout;
     });
   };
@@ -218,7 +359,6 @@ export default function WorkoutsScreen() {
       setRestTimer((prevTime) => {
         if (prevTime <= 1) {
           // Tempo acabou - finalizar série automaticamente
-          const exerciseId = restExerciseId;
           setIsResting(false);
           setRestExerciseId(null);
           if (restIntervalRef.current) {
@@ -226,10 +366,8 @@ export default function WorkoutsScreen() {
             restIntervalRef.current = null;
           }
           
-          // Finalizar a série atual se houver exercício em descanso
-          if (exerciseId) {
-            completeSet(exerciseId);
-          }
+          // Finalizar a série atual usando o exerciseId do closure
+          completeSet(exerciseId);
           
           // Tocar som ou vibração (opcional)
           Alert.alert('Descanso Finalizado!', 'Série finalizada! Tempo de volta ao treino! 💪');
@@ -249,6 +387,38 @@ export default function WorkoutsScreen() {
       clearInterval(restIntervalRef.current);
       restIntervalRef.current = null;
     }
+  };
+
+  // Função especial para retomar cronômetro de progresso salvo
+  const startRestTimerFromSaved = (exerciseId: string, remainingTime: number) => {
+    // Limpar intervalo anterior se existir
+    if (restIntervalRef.current) {
+      clearInterval(restIntervalRef.current);
+    }
+    
+    // Iniciar countdown com tempo restante
+    restIntervalRef.current = setInterval(() => {
+      setRestTimer((prevTime) => {
+        if (prevTime <= 1) {
+          // Tempo acabou - finalizar série automaticamente
+          setIsResting(false);
+          setRestExerciseId(null);
+          if (restIntervalRef.current) {
+            clearInterval(restIntervalRef.current);
+            restIntervalRef.current = null;
+          }
+          
+          // Finalizar a série atual
+          completeSet(exerciseId);
+          
+          // Tocar som ou vibração (opcional)
+          Alert.alert('Descanso Finalizado!', 'Série finalizada! Tempo de volta ao treino! 💪');
+          
+          return 0;
+        }
+        return prevTime - 1;
+      });
+    }, 1000);
   };
 
   const skipRest = () => {
@@ -302,6 +472,9 @@ export default function WorkoutsScreen() {
       };
       currentWorkoutRef.current = updatedWorkout;
       
+      // Salvar progresso parcial (para não perder dados se app fechar)
+      saveWorkoutProgress(updatedWorkout);
+      
       // Verificar se todos os exercícios foram completados
       const allCompleted = updatedWorkout.exercises.every(ex => ex.completed);
       if (allCompleted) {
@@ -309,9 +482,15 @@ export default function WorkoutsScreen() {
         const minutes = Math.floor(totalTime / 60);
         const seconds = totalTime % 60;
         
+        // Salvar treino no histórico
+        saveCompletedWorkout({ ...updatedWorkout, completed: true });
+        
+        // Limpar progresso salvo (treino finalizado)
+        AsyncStorage.removeItem(WORKOUT_PROGRESS_KEY);
+        
         Alert.alert(
           '🎉 Parabéns!', 
-          `Treino concluído com sucesso!\nTempo total: ${minutes}:${seconds.toString().padStart(2, '0')}`,
+          `Treino concluído com sucesso!\nTempo total: ${minutes}:${seconds.toString().padStart(2, '0')}\n\nSeus dados foram salvos no histórico! 💾`,
           [
             { text: 'Voltar ao Início', onPress: () => router.replace('/') }
           ]
@@ -320,6 +499,116 @@ export default function WorkoutsScreen() {
       
       return updatedWorkout;
     });
+  };
+
+  // Função para salvar o treino completo no histórico
+  // Função para buscar o último peso usado de um exercício
+  const getLastUsedWeight = async (exerciseName: string): Promise<string | null> => {
+    try {
+      const existingHistory = await AsyncStorage.getItem(COMPLETED_WORKOUTS_KEY);
+      const history: CompletedWorkout[] = existingHistory ? JSON.parse(existingHistory) : [];
+      
+      // Procurar pelo exercício no histórico (do mais recente para o mais antigo)
+      for (const workout of history) {
+        const exercise = workout.exercises.find(ex => ex.name === exerciseName);
+        if (exercise && exercise.completedWeight) {
+          console.log(`Peso sugerido para ${exerciseName}: ${exercise.completedWeight}`);
+          return exercise.completedWeight;
+        }
+      }
+      
+      return null; // Nenhum peso encontrado
+    } catch (error) {
+      console.error('Erro ao buscar último peso:', error);
+      return null;
+    }
+  };
+
+  // Função para aplicar sugestões de peso baseadas no histórico
+  const applyWeightSuggestions = async (workout: any) => {
+    const updatedExercises = await Promise.all(
+      workout.exercises.map(async (exercise: any) => {
+        const suggestedWeight = await getLastUsedWeight(exercise.name);
+        
+        return {
+          ...exercise,
+          weight: suggestedWeight || exercise.weight, // Usa o peso sugerido ou mantém o original
+          suggestedWeight: suggestedWeight, // Adiciona campo para mostrar que é sugestão
+          completedWeight: exercise.completedWeight || suggestedWeight || exercise.weight
+        };
+      })
+    );
+    
+    return {
+      ...workout,
+      exercises: updatedExercises
+    };
+  };
+
+  const saveCompletedWorkout = async (completedWorkout: Workout) => {
+    try {
+      const workoutHistory: CompletedWorkout = {
+        id: Date.now().toString(), // ID único baseado no timestamp
+        templateId: completedWorkout.id,
+        name: completedWorkout.name,
+        date: new Date().toISOString().split('T')[0], // Formato YYYY-MM-DD
+        startTime: startTime?.toISOString() || new Date().toISOString(),
+        endTime: new Date().toISOString(),
+        totalTimeMinutes: Math.round(elapsedTime / 60),
+        exercises: completedWorkout.exercises.map(exercise => ({
+          id: exercise.id,
+          name: exercise.name,
+          sets: exercise.sets,
+          reps: exercise.reps,
+          targetWeight: exercise.weight,
+          completedWeight: exercise.completedWeight || exercise.weight,
+          completedSets: exercise.completedSets,
+          notes: `Séries completadas: ${exercise.completedSets}/${exercise.sets}`
+        }))
+      };
+
+      // Carregar histórico existente
+      const existingHistory = await AsyncStorage.getItem(COMPLETED_WORKOUTS_KEY);
+      const history: CompletedWorkout[] = existingHistory ? JSON.parse(existingHistory) : [];
+      
+      // Adicionar novo treino ao histórico
+      history.unshift(workoutHistory); // Adiciona no início (mais recente primeiro)
+      
+      // Manter apenas os últimos 100 treinos para não ocupar muito espaço
+      if (history.length > 100) {
+        history.splice(100);
+      }
+      
+      // Salvar histórico atualizado
+      await AsyncStorage.setItem(COMPLETED_WORKOUTS_KEY, JSON.stringify(history));
+      
+      console.log('Treino salvo no histórico:', workoutHistory);
+    } catch (error) {
+      console.error('Erro ao salvar treino no histórico:', error);
+    }
+  };
+
+  // Função para salvar progresso parcial do treino
+  const saveWorkoutProgress = async (workout: Workout) => {
+    try {
+      const progressData: WorkoutProgress = {
+        ...workout,
+        savedAt: new Date().toISOString(),
+        startTime: startTime?.toISOString() || new Date().toISOString(),
+        elapsedTime: elapsedTime,
+        restState: isResting ? {
+          isResting: true,
+          exerciseId: restExerciseId || '',
+          remainingTime: restTimer,
+          duration: restDuration
+        } : undefined
+      };
+      
+      await AsyncStorage.setItem(WORKOUT_PROGRESS_KEY, JSON.stringify(progressData));
+      console.log('Progresso do treino salvo com detalhes completos');
+    } catch (error) {
+      console.error('Erro ao salvar progresso do treino:', error);
+    }
   };
 
   const redoExercise = (exerciseId: string) => {
@@ -561,7 +850,10 @@ export default function WorkoutsScreen() {
                     <ThemedView style={styles.weightInfo}>
                       {exercise.weight && (
                         <ThemedText style={styles.suggestedWeight}>
-                          💪 Sugerido: <ThemedText style={styles.weightValue}>{exercise.weight}</ThemedText>
+                          {exercise.suggestedWeight ? '�' : '�💪'} Sugerido: <ThemedText style={styles.weightValue}>{exercise.weight}</ThemedText>
+                          {exercise.suggestedWeight && (
+                            <ThemedText style={styles.suggestionIndicator}> (baseado no último treino)</ThemedText>
+                          )}
                         </ThemedText>
                       )}
                       {exercise.completedWeight && (
@@ -1011,6 +1303,12 @@ const styles = StyleSheet.create({
   },
   weightValue: {
     fontWeight: '600',
+  },
+  suggestionIndicator: {
+    fontSize: 11,
+    fontStyle: 'italic',
+    opacity: 0.7,
+    color: Colors.dark.primary,
   },
   // Estilos do modal
   modalOverlay: {
