@@ -3,94 +3,78 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
-import { router } from 'expo-router';
-import React, { useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { router, useFocusEffect } from 'expo-router';
+import React, { useCallback, useState } from 'react';
 import { ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
 
-// Tipos para os treinos
+// Tipos para os treinos (alinhados com workout-control.tsx)
 interface Exercise {
   id: string;
   name: string;
+  muscleGroup: string;
+  instructions: string;
   sets: number;
-  reps: string;
-  weight?: string;
+  reps: number;
+  weight: string;
+  progressionNotes: string;
 }
 
-interface Workout {
+interface WorkoutTemplate {
   id: string;
   name: string;
   description: string;
   exercises: Exercise[];
   estimatedTime: number;
-  difficulty: 'Iniciante' | 'Intermediário' | 'Avançado';
-  muscleGroups: string[];
+  defaultRestTime?: number;
 }
 
 export default function HomeScreen() {
-  const [workouts] = useState<Workout[]>([
-    {
-      id: '1',
-      name: 'Treino A - Peito e Tríceps',
-      description: 'Treino focado no desenvolvimento do peitoral e tríceps',
-      estimatedTime: 60,
-      difficulty: 'Intermediário',
-      muscleGroups: ['Peito', 'Tríceps'],
-      exercises: [
-        { id: '1', name: 'Supino Reto', sets: 4, reps: '8-12', weight: '80kg' },
-        { id: '2', name: 'Supino Inclinado', sets: 3, reps: '10-12', weight: '70kg' },
-        { id: '3', name: 'Crucifixo', sets: 3, reps: '12-15', weight: '25kg' },
-        { id: '4', name: 'Tríceps Pulley', sets: 3, reps: '10-12', weight: '40kg' },
-        { id: '5', name: 'Tríceps Francês', sets: 3, reps: '8-10', weight: '30kg' },
-      ]
-    },
-    {
-      id: '2',
-      name: 'Treino B - Costas e Bíceps',
-      description: 'Treino para fortalecimento das costas e bíceps',
-      estimatedTime: 65,
-      difficulty: 'Intermediário',
-      muscleGroups: ['Costas', 'Bíceps'],
-      exercises: [
-        { id: '6', name: 'Puxada Frontal', sets: 4, reps: '8-12', weight: '60kg' },
-        { id: '7', name: 'Remada Curvada', sets: 4, reps: '8-10', weight: '70kg' },
-        { id: '8', name: 'Remada Unilateral', sets: 3, reps: '10-12', weight: '35kg' },
-        { id: '9', name: 'Rosca Direta', sets: 3, reps: '10-12', weight: '30kg' },
-        { id: '10', name: 'Rosca Martelo', sets: 3, reps: '12-15', weight: '20kg' },
-      ]
-    },
-    {
-      id: '3',
-      name: 'Treino C - Pernas',
-      description: 'Treino completo para membros inferiores',
-      estimatedTime: 70,
-      difficulty: 'Avançado',
-      muscleGroups: ['Quadríceps', 'Posterior', 'Glúteos', 'Panturrilha'],
-      exercises: [
-        { id: '11', name: 'Agachamento', sets: 4, reps: '10-12', weight: '100kg' },
-        { id: '12', name: 'Leg Press', sets: 4, reps: '12-15', weight: '200kg' },
-        { id: '13', name: 'Extensora', sets: 3, reps: '12-15', weight: '60kg' },
-        { id: '14', name: 'Flexora', sets: 3, reps: '12-15', weight: '50kg' },
-        { id: '15', name: 'Panturrilha', sets: 4, reps: '15-20', weight: '80kg' },
-      ]
-    },
-    {
-      id: '4',
-      name: 'Treino D - Ombros e Abdômen',
-      description: 'Fortalecimento dos ombros e core',
-      estimatedTime: 45,
-      difficulty: 'Iniciante',
-      muscleGroups: ['Ombros', 'Abdômen'],
-      exercises: [
-        { id: '16', name: 'Desenvolvimento', sets: 3, reps: '10-12', weight: '40kg' },
-        { id: '17', name: 'Elevação Lateral', sets: 3, reps: '12-15', weight: '15kg' },
-        { id: '18', name: 'Elevação Frontal', sets: 3, reps: '12-15', weight: '12kg' },
-        { id: '19', name: 'Abdominal', sets: 3, reps: '15-20' },
-        { id: '20', name: 'Prancha', sets: 3, reps: '30-60s' },
-      ]
-    }
-  ]);
+  const [workouts, setWorkouts] = useState<WorkoutTemplate[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const selectWorkout = (workout: Workout) => {
+  // Constante para a chave do AsyncStorage (mesma do workout-control.tsx)
+  const WORKOUT_TEMPLATES_KEY = '@workout_templates';
+
+  // Função para carregar dados do AsyncStorage
+  const loadWorkoutTemplates = async () => {
+    try {
+      const savedTemplates = await AsyncStorage.getItem(WORKOUT_TEMPLATES_KEY);
+      if (savedTemplates) {
+        const parsedTemplates: WorkoutTemplate[] = JSON.parse(savedTemplates);
+        setWorkouts(parsedTemplates);
+      } else {
+        // Se não há dados salvos, começar com lista vazia
+        setWorkouts([]);
+      }
+    } catch (error) {
+      console.error('Erro ao carregar treinos:', error);
+      // Em caso de erro, começar com lista vazia
+      setWorkouts([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // useFocusEffect para recarregar dados sempre que a tela voltar ao foco
+  useFocusEffect(
+    useCallback(() => {
+      loadWorkoutTemplates();
+    }, [])
+  );
+
+  // Renderização de loading
+  if (isLoading) {
+    return (
+      <ThemedView style={styles.container}>
+        <ThemedView style={styles.loadingContainer}>
+          <ThemedText>Carregando treinos...</ThemedText>
+        </ThemedView>
+      </ThemedView>
+    );
+  }
+
+  const selectWorkout = (workout: WorkoutTemplate) => {
     // Aqui vamos navegar para a tela de treinos passando o ID do treino
     router.push({
       pathname: '/workouts',
@@ -98,14 +82,7 @@ export default function HomeScreen() {
     });
   };
 
-  const getDifficultyColor = (difficulty: string) => {
-    switch (difficulty) {
-      case 'Iniciante': return '#4CAF50';
-      case 'Intermediário': return Colors.dark.primary;
-      case 'Avançado': return '#F44336';
-      default: return Colors.dark.secondary;
-    }
-  };
+
 
   return (
     <ThemedView style={styles.container}>
@@ -115,7 +92,18 @@ export default function HomeScreen() {
       </ThemedView>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {workouts.map((workout) => (
+        {workouts.length === 0 ? (
+          <ThemedView style={styles.emptyState}>
+            <IconSymbol name="dumbbell" size={48} color={Colors.dark.icon} />
+            <ThemedText type="subtitle" style={styles.emptyStateTitle}>
+              Nenhum treino cadastrado
+            </ThemedText>
+            <ThemedText style={styles.emptyStateSubtitle}>
+              Vá para a aba "Controle" para criar seus treinos
+            </ThemedText>
+          </ThemedView>
+        ) : (
+          workouts.map((workout) => (
           <TouchableOpacity
             key={workout.id}
             style={styles.workoutCard}
@@ -152,20 +140,18 @@ export default function HomeScreen() {
                 </ThemedView>
               </ThemedView>
 
-              <ThemedView style={styles.infoRow}>
-                <ThemedView style={[styles.difficultyBadge, { backgroundColor: getDifficultyColor(workout.difficulty) + '20' }]}>
-                  <ThemedText style={[styles.difficultyText, { color: getDifficultyColor(workout.difficulty) }]}>
-                    {workout.difficulty}
-                  </ThemedText>
-                </ThemedView>
-              </ThemedView>
-
               <ThemedView style={styles.muscleGroups}>
-                {workout.muscleGroups.map((muscle, index) => (
+                {/* Mostrar grupos musculares únicos dos exercícios */}
+                {Array.from(new Set(workout.exercises.map(ex => ex.muscleGroup))).slice(0, 3).map((muscle: string, index: number) => (
                   <ThemedView key={index} style={styles.muscleTag}>
                     <ThemedText style={styles.muscleText}>{muscle}</ThemedText>
                   </ThemedView>
                 ))}
+                {Array.from(new Set(workout.exercises.map(ex => ex.muscleGroup))).length > 3 && (
+                  <ThemedView style={styles.muscleTag}>
+                    <ThemedText style={styles.muscleText}>+{Array.from(new Set(workout.exercises.map(ex => ex.muscleGroup))).length - 3}</ThemedText>
+                  </ThemedView>
+                )}
               </ThemedView>
             </ThemedView>
 
@@ -176,7 +162,8 @@ export default function HomeScreen() {
               </ThemedText>
             </ThemedView>
           </TouchableOpacity>
-        ))}
+          ))
+        )}
 
         <ThemedView style={styles.footer}>
           <ThemedText style={styles.footerText}>
@@ -194,6 +181,28 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     paddingTop: 50,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  emptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 40,
+  },
+  emptyStateTitle: {
+    marginTop: 16,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  emptyStateSubtitle: {
+    textAlign: 'center',
+    opacity: 0.7,
+    lineHeight: 20,
   },
   header: {
     paddingHorizontal: 20,

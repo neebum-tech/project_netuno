@@ -1,10 +1,10 @@
 {
   "expo": {
-    "name": "project_netuno",
+    "name": "Rest Time",
     "slug": "project_netuno",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/logo_rest_time.png",
     "scheme": "projectnetuno",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -12,30 +12,34 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.projectnetuno.app",
+      "versionCode": 2,
       "adaptiveIcon": {
         "backgroundColor": "#1A0033",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "foregroundImage": "./assets/images/logo_rest_time.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE"
+      ]
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/logo_rest_time.png"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
+          "image": "./assets/images/logo_rest_time.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
+          "backgroundColor": "#0F0F0F",
           "dark": {
-            "backgroundColor": "#000000"
+            "backgroundColor": "#0F0F0F"
           }
         }
       ]
@@ -43,6 +47,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "76fa5ecb-e3cb-432e-ba84-793898859724"
+      }
     }
   }
 }
